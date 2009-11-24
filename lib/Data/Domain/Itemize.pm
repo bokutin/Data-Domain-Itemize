@@ -99,11 +99,11 @@ sub _error2text {
         $def->( $field_text );
     }
     elsif ( _STRING($def) ) {
-        "${field_text}を$def";
+        "« ${field_text} » $def";
     }
     else {
         $error =~ m/^\w+:\s(.*)/;
-        "${field_text}: $1";
+        "« ${field_text} » $1";
     }
 }
 
