@@ -3,8 +3,8 @@ use inc::Module::Install;
 name 'Data::Domain::Itemize';
 all_from 'lib/Data/Domain/Itemize.pm';
 
+requires 'Any::Moose';
 requires 'Data::Domain';
-requires 'Moose';
 requires 'Params::Util';
 requires 'Try::Tiny';
 requires 'namespace::autoclean'

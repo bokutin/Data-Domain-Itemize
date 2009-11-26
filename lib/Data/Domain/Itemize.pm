@@ -1,125 +1,59 @@
 package Data::Domain::Itemize;
 
 use utf8;
-use Moose;
-use namespace::autoclean;
 
+use namespace::autoclean;
+use Any::Moose;
 use Data::Domain;
-use PadWalker qw(peek_my peek_sub);
 use Params::Util ':ALL';
 use Try::Tiny;
 #use YAML::Syck;
 
-has data => (
-    is      => "rw",
-    default => sub { {} },
-);
-
-has domain => (
-    is      => "rw",
-    isa     => "Data::Domain",
-    default => sub { my $domain = Struct() },
-);
-
-has error2text => (
-    is      => "rw",
-    isa     => "HashRef",
-    default => sub {
-        ${ peek_sub(\&Data::Domain::messages)->{'$builtin_msgs'} }->{"english"};
-    },
-);
-
-has field2text => (
-    is      => "rw",
-    default => sub { {} },
-);
-
-has _results => (
-    is      => "rw",
-    isa     => "HashRef",
-    default => sub { {} },
-);
+has item_printer => ( is => "rw", isa => "CodeRef", lazy => 1, default => sub { \&_item_printer_default } );
 
 __PACKAGE__->meta->make_immutable;
 no Moose;
 
 sub itemize {
-    my $self = shift;
+    my ( $self, $results, $domain, $labels ) = @_;
 
-    my $domain = $self->domain;
-    my $data   = $self->data;
-
-    my $orig;
-
-    Data::Domain->messages(sub {
-        my ($msg_id, @args) = @_;
-
-        $orig = ${peek_my(1)->{'$global_msgs'}};
-
-        my $name = ${peek_my(1)->{'$name'}};
-        return "$name: $msg_id";
-    });
-
-    $self->_results( $domain->inspect($data) );
-    #warn Dump($domain);
-    #warn Dump($results);
+    $labels ||= {};
 
     my $keys = [];
     my $msgs = [];
-    $self->_walk($domain, $keys, $msgs);
-
-    #Data::Domain->messages($orig);
+    $self->_walk($results, $labels, $domain, $keys, $msgs);
 
     @$msgs;
 }
 
-sub _field2text {
-    my ( $self, @keys ) = @_;
-
-    my @indexes = grep { m/^\d+$/ } @keys;
-    my @digit   = map { $_+1 } @indexes;
-    my $path    = join(".", map { m/^\d+$/ ? '*' : $_ } @keys);
-
-    sprintf($self->field2text->{$path} || $path, @digit);
+sub _item_printer_default {
+    my ( $address, $label, $domain_name, $message ) = @_;
+    sprintf("%s: %s", $label, $message);
 }
 
-sub _error2text {
-    my ( $self, $error, @keys ) = @_;
+sub _paths2label {
+    my ( $self, $labels, @paths ) = @_;
 
-    my $field_text = $self->_field2text(@keys);
+    my @indexes = grep { m/^\d+$/ } @paths;
+    my @digit   = map { $_+1 } @indexes;
+    my $address = join(".", map { m/^\d+$/ ? '*' : $_ } @paths);
 
-    # Num: 半角数字で入力してください。
-    # String: UNDEFINED
-
-    my ($subclass, $error_id) = split(/\s*:\s*/, $error);
-    my $map = $self->error2text;
-    my $def = try { $map->{$subclass}{$error_id} || $map->{Generic}{$error_id} };
-
-    if ( _CODE($def) ) {
-        $def->( $field_text );
-    }
-    elsif ( _STRING($def) ) {
-        "« ${field_text} » $def";
-    }
-    else {
-        $error =~ m/^\w+:\s(.*)/;
-        "« ${field_text} » $1";
-    }
+    sprintf($labels->{$address} || $address, @digit);
 }
 
 sub _walk {
-    my ( $self, $cur, $paths, $msgs ) = @_;
+    my ( $self, $results, $labels, $cur, $paths, $msgs ) = @_;
 
     if ( _INSTANCE($cur, "Data::Domain::Struct") ) {
         for my $f ( @{$cur->{-fields_list}} ) {
             push @$paths, $f;
-            $self->_walk($cur->{-fields}{$f}, $paths, $msgs);
+            $self->_walk($results, $labels, $cur->{-fields}{$f}, $paths, $msgs);
             pop @$paths;
         }
     }
     elsif ( _INSTANCE($cur, "Data::Domain::List") ) {
         my $error_id = do {
-            my $pos = $self->_results;
+            my $pos = $results;
             for (@$paths) {
                 if (_HASH($pos)) {
                     $pos = $pos->{$_};
@@ -134,7 +68,7 @@ sub _walk {
         if ( _STRING($error_id) ) {
             for my $f ( @{$cur->{-all}{-fields_list}} ) {
                 push @$paths, $f;
-                $self->_walk($cur->{-all}{-fields}{$f}, $paths, $msgs);
+                $self->_walk($results, $labels, $cur->{-all}{-fields}{$f}, $paths, $msgs);
                 pop @$paths;
             }
         }
@@ -143,7 +77,7 @@ sub _walk {
             for (@$error_id) {
                 for my $f ( @{$cur->{-all}{-fields_list}} ) {
                     push @$paths, $i, $f;
-                    $self->_walk($cur->{-all}{-fields}{$f}, $paths, $msgs);
+                    $self->_walk($results, $labels, $cur->{-all}{-fields}{$f}, $paths, $msgs);
                     pop @$paths;
                     pop @$paths;
                 }
@@ -151,10 +85,13 @@ sub _walk {
             }
         }
     }
+    elsif ( _INSTANCE($cur, "Data::Domain::All") ) {
+        $self->_walk($results, $labels, $cur->{error_domain}, $paths, $msgs);
+    }
     else {
         my @arrived;
 
-        my $pos = $self->_results;
+        my $pos = $results;
         for (@$paths) {
             if (_HASH($pos)) {
                 push @arrived, $_;
@@ -169,9 +106,11 @@ sub _walk {
             }
         }
 
-        if (my $error_id = $pos) {
-            my $msg = $self->_error2text($error_id, @arrived);
-            push @$msgs, $msg;
+        if (my $msg = $pos) {
+            my $field = $self->_paths2label($labels, @arrived);
+
+            my ($name, $message) = $msg =~ m/^(?:(\w+): )?(.*)$/;
+            push @$msgs, $self->item_printer->(join(".", @arrived), $field, $name, $message);
         }
     }
 }
@@ -230,3 +169,32 @@ land:
 user:
   password: String, UNDEFINED
   username: String, UNDEFINED
+
+
+--- !!perl/hash:Data::Domain::All
+-domains:
+  - !!perl/hash:Data::Domain::Struct
+    -fields:
+      username: !!perl/hash:Data::Domain::All
+        -domains:
+          - !!perl/hash:Data::Domain::String
+            -max_length: 32
+            -min_length: 4
+          - !!perl/hash:Data::Domain::Code
+            -coderefs:
+              - !!perl/code: '{ "DUMMY" }'
+            -messages:
+              NOT_EXISTS: 登録されていません。
+    -fields_list:
+      - username
+  - !!perl/hash:Data::Domain::Struct
+    -fields:
+      password: !!perl/hash:Data::Domain::All
+        -domains:
+          - !!perl/hash:Data::Domain::Code
+            -coderefs:
+              - !!perl/code: '{ "DUMMY" }'
+            -messages:
+              INVALID_PASSWORD: パスワードが違います。
+    -fields_list:
+      - password

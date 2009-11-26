@@ -3,20 +3,20 @@ package Data::Domain::Code;
 use strict;
 use warnings;
 use Carp;
-use Exporter 'import';
-
-our @EXPORT = qw(Code); 
 our @ISA = 'Data::Domain';
 
+use Exporter 'import';
+our @EXPORT_OK = qw(Code); 
 sub Code { __PACKAGE__->new(@_) }
 
 sub new {
     my $class   = shift;
-    my @options = ();
-    my $self    = Data::Domain::_parse_args([], \@options);
+    my @options = qw/-coderefs/;
+    my $self = Data::Domain::_parse_args(\@_, \@options, -coderefs => 'arrayref');
     bless $self, $class;
 
-    $self->{codes} = [@_];
+    $self->{-coderefs} and ref($self->{-coderefs}) eq 'ARRAY'
+        or croak "Code: invalid coderefs";
 
     return $self;
 }
@@ -24,22 +24,12 @@ sub new {
 sub _inspect {
     my ( $self, $data, $context ) = @_;
 
-    for my $code ( @{ $self->{codes} } ) {
-
-        my @ret     = $code->( $context, $data );
-
-        my @scalars = grep { !ref } @ret;
-        my @arrays  = grep { ref and ref eq "ARRAY" } @ret;
-
-        my $msg_id  = $scalars[0];
-        my $name    = $scalars[1];
-        my $args    = $arrays[0] || [];
+    for my $code ( @{ $self->{-coderefs} } ) {
+        my ($msg_id, @args) = $code->( $context, $data );
 
         if ( $msg_id ) {
-            local $self->{-name} = $name if $name;
-            return $self->msg($msg_id => @$args);
+            return $self->msg($msg_id => @args);
         }
-
     }
 
     return;
