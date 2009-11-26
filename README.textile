@@ -1,7 +1,10 @@
 ネストに対応したバリデータが欲しいよ。
 
-Demiさんの "Data::Domain":http://search.cpan.org/perldoc?Data::Domain はネストに対応したバリデータだよ。
+"Damiさん":http://search.cpan.org/~dami/ の "Data::Domain":http://search.cpan.org/perldoc?Data::Domain はネストに対応したバリデータだよ。
 
+結果はネストで返ってくるんだ。便利なこともあるけど、リストで欲しいこともあるよね。
+
+そこで Itemize を書いてみたのさ。
 <pre>
 use utf8;
 use strict;
